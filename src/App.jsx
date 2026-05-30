@@ -1,5 +1,18 @@
 import { useState, useEffect } from "react";
 import { initialBooks } from "./data/initialBooks";
+import { auth, db } from "./firebase";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut,
+  onAuthStateChanged
+} from "firebase/auth";
+import {
+  doc,
+  setDoc,
+  getDoc
+} from "firebase/firestore";
 
 // Helper to seed localStorage
 const getLocalStorageData = (key, defaultValue) => {
@@ -105,6 +118,38 @@ function App() {
   }, [currentUser]);
 
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          if (userDoc.exists()) {
+            setCurrentUser({
+              uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              ...userDoc.data()
+            });
+          } else {
+            setCurrentUser({
+              uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              name: firebaseUser.displayName || firebaseUser.email.split("@")[0],
+              role: firebaseUser.email.includes("admin") ? "admin" : "user"
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching user profile in auth state change:", error);
+        }
+      } else {
+        // Solo cerramos sesión si el usuario actual es de Firebase (tiene uid)
+        // Esto previene cerrar la sesión de usuarios demo locales
+        setCurrentUser(prev => (prev && prev.uid ? null : prev));
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem("cart", JSON.stringify(cart));
   }, [cart]);
 
@@ -133,7 +178,7 @@ function App() {
   };
 
   // --- AUTHENTICATION ACTIONS ---
-  const handleRegister = (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     setAuthError("");
     setAuthSuccess("");
@@ -148,39 +193,57 @@ function App() {
       return;
     }
 
-    // Check if email already registered
-    const exists = users.some(u => u.email.toLowerCase() === authEmail.toLowerCase());
-    if (exists) {
-      setAuthError("El correo electrónico ya está registrado.");
-      return;
+    try {
+      // 1. Crear el usuario en Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(auth, authEmail.toLowerCase(), authPassword);
+      const user = userCredential.user;
+
+      // 2. Guardar los datos del perfil en Firestore
+      await setDoc(doc(db, "users", user.uid), {
+        email: authEmail.toLowerCase(),
+        name: authName,
+        role: authRole
+      });
+
+      // 3. Mantener compatibilidad con el estado local
+      const newUser = {
+        email: authEmail.toLowerCase(),
+        password: authPassword,
+        name: authName,
+        role: authRole
+      };
+      setUsers(prev => [...prev, newUser]);
+
+      addNotification(`Nuevo usuario registrado: ${authName} (${authRole === "admin" ? "Administrador" : "Cliente"})`);
+      setAuthSuccess("¡Registro completado con éxito! Ahora puedes iniciar sesión.");
+      
+      // Clear form
+      setAuthEmail("");
+      setAuthPassword("");
+      setAuthConfirmPassword("");
+      setAuthName("");
+      setAuthRole("user");
+
+      // Redirect to login after a short delay
+      setTimeout(() => {
+        setActiveTab("login");
+        setAuthSuccess("");
+      }, 1500);
+    } catch (error) {
+      console.error("Error al registrar usuario en Firebase:", error);
+      if (error.code === "auth/email-already-in-use") {
+        setAuthError("El correo electrónico ya está registrado.");
+      } else if (error.code === "auth/invalid-email") {
+        setAuthError("El formato del correo electrónico no es válido.");
+      } else if (error.code === "auth/weak-password") {
+        setAuthError("La contraseña debe tener al menos 6 caracteres.");
+      } else {
+        setAuthError(`Error al registrarse: ${error.message}`);
+      }
     }
-
-    const newUser = {
-      email: authEmail.toLowerCase(),
-      password: authPassword,
-      name: authName,
-      role: authRole
-    };
-
-    setUsers(prev => [...prev, newUser]);
-    addNotification(`Nuevo usuario registrado: ${authName} (${authRole === "admin" ? "Administrador" : "Cliente"})`);
-    setAuthSuccess("¡Registro completado con éxito! Ahora puedes iniciar sesión.");
-    
-    // Clear form
-    setAuthEmail("");
-    setAuthPassword("");
-    setAuthConfirmPassword("");
-    setAuthName("");
-    setAuthRole("user");
-
-    // Redirect to login after a short delay
-    setTimeout(() => {
-      setActiveTab("login");
-      setAuthSuccess("");
-    }, 1500);
   };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setAuthError("");
 
@@ -189,57 +252,147 @@ function App() {
       return;
     }
 
-    const user = users.find(
-      u => u.email.toLowerCase() === authEmail.toLowerCase() && u.password === authPassword
-    );
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, authEmail.toLowerCase(), authPassword);
+      const user = userCredential.user;
 
-    if (!user) {
-      setAuthError("Credenciales incorrectas.");
-      return;
+      // Obtener detalles adicionales del usuario desde Firestore
+      const userDoc = await getDoc(doc(db, "users", user.uid));
+      let loggedUser = null;
+
+      if (userDoc.exists()) {
+        loggedUser = {
+          uid: user.uid,
+          email: user.email,
+          ...userDoc.data()
+        };
+      } else {
+        const defaultName = user.displayName || user.email.split("@")[0];
+        const defaultRole = user.email.includes("admin") ? "admin" : "user";
+        
+        loggedUser = {
+          uid: user.uid,
+          email: user.email,
+          name: defaultName,
+          role: defaultRole
+        };
+
+        await setDoc(doc(db, "users", user.uid), {
+          email: user.email,
+          name: defaultName,
+          role: defaultRole
+        });
+      }
+
+      setCurrentUser(loggedUser);
+      addNotification(`Sesión iniciada por ${loggedUser.name}`);
+      
+      // Clear form
+      setAuthEmail("");
+      setAuthPassword("");
+
+      // Redirect to catalog or admin depending on role
+      if (loggedUser.role === "admin") {
+        setActiveTab("admin-books");
+      } else {
+        setActiveTab("catalog");
+      }
+    } catch (error) {
+      console.error("Error al iniciar sesión en Firebase:", error);
+      
+      // Fallback local para las cuentas de demostración predeterminadas si Firebase falla
+      const localUser = users.find(
+        u => u.email.toLowerCase() === authEmail.toLowerCase() && u.password === authPassword
+      );
+
+      if (localUser) {
+        setCurrentUser(localUser);
+        addNotification(`Sesión iniciada localmente por ${localUser.name} (Cuenta Demo)`);
+        setAuthEmail("");
+        setAuthPassword("");
+        if (localUser.role === "admin") {
+          setActiveTab("admin-books");
+        } else {
+          setActiveTab("catalog");
+        }
+      } else {
+        if (error.code === "auth/user-not-found" || error.code === "auth/wrong-password" || error.code === "auth/invalid-credential") {
+          setAuthError("Credenciales incorrectas.");
+        } else if (error.code === "auth/invalid-email") {
+          setAuthError("El formato del correo electrónico no es válido.");
+        } else {
+          setAuthError(`Error al iniciar sesión: ${error.message}`);
+        }
+      }
     }
+  };
 
-    setCurrentUser(user);
-    addNotification(`Sesión iniciada por ${user.name}`);
-    
-    // Clear form
-    setAuthEmail("");
-    setAuthPassword("");
-
-    // Redirect to catalog or admin depending on role
-    if (user.role === "admin") {
-      setActiveTab("admin-books");
-    } else {
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      if (currentUser) {
+        addNotification(`Sesión cerrada por ${currentUser.name}`);
+      }
+      setCurrentUser(null);
+      setCart([]);
+      setActiveTab("catalog");
+    } catch (error) {
+      console.error("Error al cerrar sesión:", error);
+      setCurrentUser(null);
+      setCart([]);
       setActiveTab("catalog");
     }
   };
 
-  const handleLogout = () => {
-    if (currentUser) {
-      addNotification(`Sesión cerrada por ${currentUser.name}`);
-    }
-    setCurrentUser(null);
-    setCart([]);
-    setActiveTab("catalog");
-  };
-
-  const handleRecoverPassword = (e) => {
+  const handleRecoverPassword = async (e) => {
     e.preventDefault();
     setAuthError("");
     setAuthSuccess("");
 
+    if (!authEmail) {
+      setAuthError("Por favor, ingresa tu correo electrónico.");
+      return;
+    }
+
+    const emailLower = authEmail.toLowerCase();
+    const isDemoUser = emailLower === "user@bibliotech.com" || emailLower === "admin@bibliotech.com";
+
     if (recoverStep === 1) {
-      if (!authEmail) {
-        setAuthError("Por favor, ingresa tu correo electrónico.");
-        return;
+      if (isDemoUser) {
+        // Flujo local para cuentas demo (ya que no tienen bandeja de correo real)
+        const user = users.find(u => u.email.toLowerCase() === emailLower);
+        if (!user) {
+          setAuthError("No existe ninguna cuenta registrada con este correo electrónico.");
+          return;
+        }
+        setRecoveredEmail(emailLower);
+        setRecoverStep(2);
+      } else {
+        // Flujo real de Firebase Auth para correos reales
+        try {
+          await sendPasswordResetEmail(auth, emailLower);
+          setAuthSuccess("Se ha enviado un correo electrónico para restablecer tu contraseña. Por favor, revisa tu bandeja de entrada.");
+          addNotification(`Correo de recuperación enviado a ${emailLower}`);
+          
+          setTimeout(() => {
+            setAuthEmail("");
+            setActiveTab("login");
+            setAuthSuccess("");
+          }, 4000);
+        } catch (error) {
+          console.error("Error al enviar correo de recuperación:", error);
+          if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential") {
+            // Firebase Auth sometimes returns invalid-credential in new versions
+            setAuthError("No existe ninguna cuenta registrada con este correo electrónico.");
+          } else if (error.code === "auth/invalid-email") {
+            setAuthError("El formato del correo electrónico no es válido.");
+          } else {
+            setAuthError(`Error al restablecer contraseña: ${error.message}`);
+          }
+        }
       }
-      const user = users.find(u => u.email.toLowerCase() === authEmail.toLowerCase());
-      if (!user) {
-        setAuthError("No existe ninguna cuenta registrada con este correo electrónico.");
-        return;
-      }
-      setRecoveredEmail(authEmail.toLowerCase());
-      setRecoverStep(2);
     } else if (recoverStep === 2) {
+      // Este paso solo es accesible para los usuarios demo locales
       if (!authPassword || !authConfirmPassword) {
         setAuthError("Por favor, completa los campos de contraseña.");
         return;
@@ -249,7 +402,7 @@ function App() {
         return;
       }
 
-      // Update password
+      // Actualizar contraseña localmente
       setUsers(prev => prev.map(u => {
         if (u.email === recoveredEmail) {
           return { ...u, password: authPassword };
@@ -257,8 +410,8 @@ function App() {
         return u;
       }));
 
-      addNotification(`Contraseña restablecida para ${recoveredEmail}`);
-      setAuthSuccess("Contraseña restablecida con éxito. Redirigiendo a inicio de sesión...");
+      addNotification(`Contraseña restablecida localmente para cuenta demo ${recoveredEmail}`);
+      setAuthSuccess("Contraseña de cuenta demo restablecida con éxito. Redirigiendo a inicio de sesión...");
       
       setTimeout(() => {
         setRecoverStep(1);
