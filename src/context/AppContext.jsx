@@ -11,8 +11,14 @@ import {
 import {
   doc,
   setDoc,
-  getDoc
+  getDoc,
+  collection,
+  getDocs,
+  addDoc,
+  updateDoc,
+  onSnapshot
 } from "firebase/firestore";
+import { seedDatabase } from "../data/seedFirestore";
 
 // Helper to seed localStorage
 const getLocalStorageData = (key, defaultValue) => {
@@ -31,7 +37,7 @@ const AppContext = createContext();
 
 export const AppProvider = ({ children }) => {
   // --- STATE DECLARATIONS ---
-  const [books, setBooks] = useState(() => getLocalStorageData("books", initialBooks));
+  const [books, setBooks] = useState([]);
   const [users, setUsers] = useState(() => 
     getLocalStorageData("users", [
       { email: "admin@bibliotech.com", password: "admin123", name: "Administrador General", role: "admin" },
@@ -107,8 +113,50 @@ export const AppProvider = ({ children }) => {
 
   // --- PERSISTENCE EFFECTS ---
   useEffect(() => {
-    localStorage.setItem("books", JSON.stringify(books));
-  }, [books]);
+    let unsubscribeBooks = () => {};
+
+    const loadData = async () => {
+      // Intentar popular la base de datos si está vacía
+      await seedDatabase();
+
+      // Escuchar cambios en la colección de libros
+      unsubscribeBooks = onSnapshot(collection(db, "libro"), async (snapshot) => {
+        try {
+          const autoresSnapshot = await getDocs(collection(db, "autor"));
+          const categoriasSnapshot = await getDocs(collection(db, "categoria"));
+          
+          const autoresMap = {};
+          autoresSnapshot.forEach(d => { autoresMap[d.id] = d.data().nombre; });
+          
+          const categoriasMap = {};
+          categoriasSnapshot.forEach(d => { categoriasMap[d.id] = d.data().nombre; });
+
+          const loadedBooks = snapshot.docs.map(docData => {
+            const data = docData.data();
+            return {
+              id: docData.id,
+              title: data.titulo,
+              author: data.autor ? autoresMap[data.autor.id] || "Autor Desconocido" : "Autor Desconocido",
+              category: data.categoria ? categoriasMap[data.categoria.id] || "Sin Categoría" : "Sin Categoría",
+              description: data.description || "Sin descripción",
+              price: data.precio || 0,
+              stock: data.stock || 0,
+              gradient: data.gradient || "linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)",
+              icon: data.icon || "📖",
+              isbn: data.isbn || ""
+            };
+          });
+          setBooks(loadedBooks);
+        } catch (err) {
+          console.error("Error resolviendo referencias de libros:", err);
+        }
+      });
+    };
+
+    loadData();
+
+    return () => unsubscribeBooks();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("users", JSON.stringify(users));
@@ -536,13 +584,17 @@ export const AppProvider = ({ children }) => {
         paymentCard: "**** **** **** " + rawCardNum.slice(-4)
       };
 
-      setBooks(prev => prev.map(book => {
-        const cartItem = cart.find(item => item.bookId === book.id);
-        if (cartItem) {
-          return { ...book, stock: Math.max(0, book.stock - cartItem.quantity) };
+      cart.forEach(async (item) => {
+        const book = books.find(b => b.id === item.bookId);
+        if (book) {
+          const newStock = Math.max(0, book.stock - item.quantity);
+          try {
+            await updateDoc(doc(db, "libro", item.bookId), { stock: newStock });
+          } catch(e) {
+            console.error("Error actualizando stock en compra", e);
+          }
         }
-        return book;
-      }));
+      });
 
       setSales(prev => [newInvoice, ...prev]);
 
@@ -568,7 +620,7 @@ export const AppProvider = ({ children }) => {
     }, 2000);
   };
 
-  const handleCreateBook = (e) => {
+  const handleCreateBook = async (e) => {
     e.preventDefault();
     setAdminBookError("");
     setAdminBookSuccess("");
@@ -591,37 +643,70 @@ export const AppProvider = ({ children }) => {
       return;
     }
 
-    const newBook = {
-      id: Date.now().toString(),
-      title: newBookTitle,
-      author: newBookAuthor,
-      category: newBookCategory,
-      description: newBookDescription || "Sin descripción disponible.",
-      price: price,
-      stock: stock,
-      gradient: newBookGradient,
-      icon: newBookIcon
-    };
+    try {
+      let autorRef = null;
+      const autoresSnapshot = await getDocs(collection(db, "autor"));
+      const autorDoc = autoresSnapshot.docs.find(d => d.data().nombre.toLowerCase() === newBookAuthor.toLowerCase());
+      if (autorDoc) {
+        autorRef = doc(db, "autor", autorDoc.id);
+      } else {
+        const newAutorRef = await addDoc(collection(db, "autor"), {
+          nombre: newBookAuthor,
+          nacionalidad: "Desconocida",
+          biblioteca: "Principal"
+        });
+        autorRef = newAutorRef;
+      }
 
-    setBooks(prev => [...prev, newBook]);
-    addNotification(`Catálogo: Se ha añadido el nuevo libro '${newBookTitle}' de ${newBookAuthor}.`);
-    setAdminBookSuccess(`¡El libro '${newBookTitle}' se ha registrado exitosamente!`);
+      let categoriaRef = null;
+      const categoriasSnapshot = await getDocs(collection(db, "categoria"));
+      const categoriaDoc = categoriasSnapshot.docs.find(d => d.data().nombre.toLowerCase() === newBookCategory.toLowerCase());
+      if (categoriaDoc) {
+        categoriaRef = doc(db, "categoria", categoriaDoc.id);
+      } else {
+        const newCategoriaRef = await addDoc(collection(db, "categoria"), {
+          nombre: newBookCategory,
+          descripcion: `Categoría de ${newBookCategory}`
+        });
+        categoriaRef = newCategoriaRef;
+      }
 
-    setNewBookTitle("");
-    setNewBookAuthor("");
-    setNewBookCategory("");
-    setNewBookDescription("");
-    setNewBookPrice("");
-    setNewBookStock("");
-    setNewBookIcon("📖");
-    setNewBookGradient("linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)");
+      const randomISBN = "978-" + Math.floor(Math.random() * 9000000000 + 1000000000);
+      
+      await addDoc(collection(db, "libro"), {
+        titulo: newBookTitle,
+        autor: autorRef,
+        categoria: categoriaRef,
+        precio: price,
+        stock: stock,
+        isbn: randomISBN,
+        description: newBookDescription || "Sin descripción disponible.",
+        gradient: newBookGradient,
+        icon: newBookIcon
+      });
 
-    setTimeout(() => {
-      setAdminBookSuccess("");
-    }, 3000);
+      addNotification(`Catálogo: Se ha añadido el nuevo libro '${newBookTitle}' de ${newBookAuthor}.`);
+      setAdminBookSuccess(`¡El libro '${newBookTitle}' se ha registrado exitosamente!`);
+
+      setNewBookTitle("");
+      setNewBookAuthor("");
+      setNewBookCategory("");
+      setNewBookDescription("");
+      setNewBookPrice("");
+      setNewBookStock("");
+      setNewBookIcon("📖");
+      setNewBookGradient("linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)");
+
+      setTimeout(() => {
+        setAdminBookSuccess("");
+      }, 3000);
+    } catch (error) {
+      console.error("Error creando libro en Firestore:", error);
+      setAdminBookError("Hubo un error al crear el libro.");
+    }
   };
 
-  const handleUpdateBookPriceStock = (bookId) => {
+  const handleUpdateBookPriceStock = async (bookId) => {
     const price = parseFloat(editPriceVal);
     const stock = parseInt(editStockVal, 10);
 
@@ -637,15 +722,19 @@ export const AppProvider = ({ children }) => {
 
     const bookBefore = books.find(b => b.id === bookId);
 
-    setBooks(prev => prev.map(book => {
-      if (book.id === bookId) {
-        return { ...book, price: price, stock: stock };
-      }
-      return book;
-    }));
+    try {
+      const libroRef = doc(db, "libro", bookId);
+      await updateDoc(libroRef, {
+        precio: price,
+        stock: stock
+      });
 
-    setEditingBookId(null);
-    addNotification(`Inventario: Libro '${bookBefore.title}' actualizado. Precio: $${price.toFixed(2)}, Stock: ${stock}.`);
+      setEditingBookId(null);
+      addNotification(`Inventario: Libro '${bookBefore.title}' actualizado. Precio: $${price.toFixed(2)}, Stock: ${stock}.`);
+    } catch (error) {
+      console.error("Error actualizando precio/stock en Firestore:", error);
+      alert("Hubo un error al actualizar el libro.");
+    }
   };
 
   const getBestSellingBook = () => {
