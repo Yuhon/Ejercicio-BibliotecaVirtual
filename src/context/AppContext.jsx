@@ -16,7 +16,10 @@ import {
   getDocs,
   addDoc,
   updateDoc,
-  onSnapshot
+  onSnapshot,
+  query,
+  where,
+  deleteDoc
 } from "firebase/firestore";
 import { seedDatabase } from "../data/seedFirestore";
 
@@ -45,7 +48,8 @@ export const AppProvider = ({ children }) => {
     ])
   );
   const [currentUser, setCurrentUser] = useState(() => getLocalStorageData("currentUser", null));
-  const [cart, setCart] = useState(() => getLocalStorageData("cart", []));
+  const [currentCartId, setCurrentCartId] = useState(null);
+  const [cart, setCart] = useState([]);
   const [sales, setSales] = useState(() => getLocalStorageData("sales", []));
   const [notifications, setNotifications] = useState(() => 
     getLocalStorageData("notifications", [
@@ -170,12 +174,14 @@ export const AppProvider = ({ children }) => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
-          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          const userDoc = await getDoc(doc(db, "usuario", firebaseUser.uid));
           if (userDoc.exists()) {
+            const data = userDoc.data();
             setCurrentUser({
               uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              ...userDoc.data()
+              email: data.correo,
+              name: data.nombre,
+              role: data.rolAdministrador ? "admin" : "user"
             });
           } else {
             setCurrentUser({
@@ -196,13 +202,109 @@ export const AppProvider = ({ children }) => {
     return () => unsubscribe();
   }, []);
 
+  // Escuchar carrito activo del usuario logueado
   useEffect(() => {
-    localStorage.setItem("cart", JSON.stringify(cart));
-  }, [cart]);
+    if (!currentUser) {
+      setCart([]);
+      setCurrentCartId(null);
+      return;
+    }
 
+    const loadCart = async () => {
+      const q = query(
+        collection(db, "carrito"), 
+        where("usuario", "==", doc(db, "usuario", currentUser.uid)), 
+        where("estado", "==", "activo")
+      );
+      const snapshot = await getDocs(q);
+      
+      let cartId = null;
+      if (snapshot.empty) {
+        const newCartRef = await addDoc(collection(db, "carrito"), {
+          usuario: doc(db, "usuario", currentUser.uid),
+          estado: "activo",
+          fecha: new Date().toISOString()
+        });
+        cartId = newCartRef.id;
+      } else {
+        cartId = snapshot.docs[0].id;
+      }
+      setCurrentCartId(cartId);
+
+      const unsubscribeDetalle = onSnapshot(
+        query(collection(db, "detalle_carrito"), where("carrito", "==", doc(db, "carrito", cartId))), 
+        (detSnapshot) => {
+          const loadedCart = detSnapshot.docs.map(d => {
+            const data = d.data();
+            return {
+              id: d.id, 
+              bookId: data.libro.id,
+              quantity: data.cantidad,
+              price: data.precio_unitario
+            };
+          });
+          setCart(loadedCart);
+        }
+      );
+      return unsubscribeDetalle;
+    };
+
+    let unsub = () => {};
+    loadCart().then(res => { if(typeof res === 'function') unsub = res; });
+    return () => unsub();
+  }, [currentUser]);
+
+  // Escuchar historial de compras
   useEffect(() => {
-    localStorage.setItem("sales", JSON.stringify(sales));
-  }, [sales]);
+    if (!currentUser || books.length === 0) {
+      if (!currentUser) setSales([]);
+      return;
+    }
+
+    const loadSales = async () => {
+      const q = query(collection(db, "compra"), where("usuario", "==", doc(db, "usuario", currentUser.uid)));
+      const snapshot = await getDocs(q);
+      
+      const loadedSales = [];
+      for (const compDoc of snapshot.docs) {
+        const data = compDoc.data();
+        
+        const qDetalles = query(collection(db, "detalle_compra"), where("compra", "==", doc(db, "compra", compDoc.id)));
+        const detSnapshot = await getDocs(qDetalles);
+        
+        const invoiceItems = detSnapshot.docs.map(d => {
+           const detData = d.data();
+           const bookId = detData.libro.id;
+           const book = books.find(b => b.id === bookId);
+           return {
+             bookId: bookId,
+             title: book ? book.title : "Libro Desconocido",
+             author: book ? book.author : "Desconocido",
+             price: detData.precio_unitario,
+             quantity: detData.cantidad
+           };
+        });
+
+        loadedSales.push({
+          id: compDoc.id, 
+          userEmail: currentUser.email,
+          userName: currentUser.name,
+          date: new Date(data.fecha).toLocaleString(),
+          items: invoiceItems,
+          subtotal: data.total / 1.12,
+          tax: data.total - (data.total / 1.12),
+          total: data.total,
+          paymentCard: "**** **** **** 1234"
+        });
+      }
+      
+      setSales(loadedSales.sort((a,b) => new Date(b.date) - new Date(a.date)));
+    };
+
+    loadSales();
+  }, [currentUser, books.length]);
+
+
 
   useEffect(() => {
     localStorage.setItem("notifications", JSON.stringify(notifications));
@@ -242,10 +344,10 @@ export const AppProvider = ({ children }) => {
       const userCredential = await createUserWithEmailAndPassword(auth, authEmail.toLowerCase(), authPassword);
       const user = userCredential.user;
 
-      await setDoc(doc(db, "users", user.uid), {
-        email: authEmail.toLowerCase(),
-        name: authName,
-        role: authRole
+      await setDoc(doc(db, "usuario", user.uid), {
+        correo: authEmail.toLowerCase(),
+        nombre: authName,
+        rolAdministrador: authRole === "admin"
       });
 
       const newUser = {
@@ -296,14 +398,16 @@ export const AppProvider = ({ children }) => {
       const userCredential = await signInWithEmailAndPassword(auth, authEmail.toLowerCase(), authPassword);
       const user = userCredential.user;
 
-      const userDoc = await getDoc(doc(db, "users", user.uid));
+      const userDoc = await getDoc(doc(db, "usuario", user.uid));
       let loggedUser = null;
 
       if (userDoc.exists()) {
+        const data = userDoc.data();
         loggedUser = {
           uid: user.uid,
-          email: user.email,
-          ...userDoc.data()
+          email: data.correo,
+          name: data.nombre,
+          role: data.rolAdministrador ? "admin" : "user"
         };
       } else {
         const defaultName = user.displayName || user.email.split("@")[0];
@@ -316,10 +420,10 @@ export const AppProvider = ({ children }) => {
           role: defaultRole
         };
 
-        await setDoc(doc(db, "users", user.uid), {
-          email: user.email,
-          name: defaultName,
-          role: defaultRole
+        await setDoc(doc(db, "usuario", user.uid), {
+          correo: user.email,
+          nombre: defaultName,
+          rolAdministrador: defaultRole === "admin"
         });
       }
 
@@ -469,8 +573,14 @@ export const AppProvider = ({ children }) => {
     setNotifications([]);
   };
 
-  const handleAddToCart = (book) => {
+  const handleAddToCart = async (book) => {
+    if (!currentUser) {
+      alert("Por favor inicia sesión para agregar productos al carrito.");
+      setActiveTab("login");
+      return;
+    }
     if (book.stock === 0) return;
+    if (!currentCartId) return;
 
     const cartItem = cart.find(item => item.bookId === book.id);
     const currentQty = cartItem ? cartItem.quantity : 0;
@@ -481,22 +591,29 @@ export const AppProvider = ({ children }) => {
     }
 
     if (cartItem) {
-      setCart(prev => prev.map(item => 
-        item.bookId === book.id ? { ...item, quantity: item.quantity + 1 } : item
-      ));
+      await updateDoc(doc(db, "detalle_carrito", cartItem.id), {
+        cantidad: currentQty + 1
+      });
     } else {
-      setCart(prev => [...prev, { bookId: book.id, quantity: 1 }]);
+      await addDoc(collection(db, "detalle_carrito"), {
+        carrito: doc(db, "carrito", currentCartId),
+        libro: doc(db, "libro", book.id),
+        cantidad: 1,
+        precio_unitario: book.price
+      });
     }
 
     setIsCartOpen(true);
   };
 
-  const handleUpdateCartQuantity = (bookId, newQty) => {
+  const handleUpdateCartQuantity = async (bookId, newQty) => {
+    if (!currentUser || !currentCartId) return;
+
     const book = books.find(b => b.id === bookId);
     if (!book) return;
 
     if (newQty <= 0) {
-      handleRemoveFromCart(bookId);
+      await handleRemoveFromCart(bookId);
       return;
     }
 
@@ -505,13 +622,20 @@ export const AppProvider = ({ children }) => {
       return;
     }
 
-    setCart(prev => prev.map(item => 
-      item.bookId === bookId ? { ...item, quantity: newQty } : item
-    ));
+    const cartItem = cart.find(item => item.bookId === bookId);
+    if (cartItem) {
+      await updateDoc(doc(db, "detalle_carrito", cartItem.id), {
+        cantidad: newQty
+      });
+    }
   };
 
-  const handleRemoveFromCart = (bookId) => {
-    setCart(prev => prev.filter(item => item.bookId !== bookId));
+  const handleRemoveFromCart = async (bookId) => {
+    if (!currentUser || !currentCartId) return;
+    const cartItem = cart.find(item => item.bookId === bookId);
+    if (cartItem) {
+      await deleteDoc(doc(db, "detalle_carrito", cartItem.id));
+    }
   };
 
   const calculateCartSubtotal = () => {
@@ -521,7 +645,7 @@ export const AppProvider = ({ children }) => {
     }, 0);
   };
 
-  const handlePaymentSubmit = (e) => {
+  const handlePaymentSubmit = async (e) => {
     e.preventDefault();
     setCheckoutError("");
 
@@ -559,8 +683,41 @@ export const AppProvider = ({ children }) => {
     const salesTax = cartSubtotal * 0.12;
     const cartTotal = cartSubtotal + salesTax;
 
-    setTimeout(() => {
+    try {
       const invoiceId = "FAC-" + Math.floor(100000 + Math.random() * 900000);
+
+      const compraRef = await addDoc(collection(db, "compra"), {
+        usuario: doc(db, "usuario", currentUser.uid),
+        estado: "completado",
+        fecha: new Date().toISOString(),
+        total: cartTotal
+      });
+
+      for (const item of cart) {
+        const book = books.find(b => b.id === item.bookId);
+        if (book) {
+          await addDoc(collection(db, "detalle_compra"), {
+            compra: compraRef,
+            libro: doc(db, "libro", item.bookId),
+            cantidad: item.quantity,
+            precio_unitario: book.price,
+            subtotal: book.price * item.quantity
+          });
+
+          const newStock = Math.max(0, book.stock - item.quantity);
+          await updateDoc(doc(db, "libro", item.bookId), { stock: newStock });
+          
+          if (newStock === 0) {
+            addNotification(`Alerta de Inventario: El libro '${book.title}' se ha agotado.`);
+          }
+        }
+      }
+
+      if (currentCartId) {
+        await updateDoc(doc(db, "carrito", currentCartId), { estado: "comprado" });
+        setCurrentCartId(null);
+      }
+
       const invoiceItems = cart.map(item => {
         const book = books.find(b => b.id === item.bookId);
         return {
@@ -584,30 +741,10 @@ export const AppProvider = ({ children }) => {
         paymentCard: "**** **** **** " + rawCardNum.slice(-4)
       };
 
-      cart.forEach(async (item) => {
-        const book = books.find(b => b.id === item.bookId);
-        if (book) {
-          const newStock = Math.max(0, book.stock - item.quantity);
-          try {
-            await updateDoc(doc(db, "libro", item.bookId), { stock: newStock });
-          } catch(e) {
-            console.error("Error actualizando stock en compra", e);
-          }
-        }
-      });
-
       setSales(prev => [newInvoice, ...prev]);
 
       addNotification(`Compra realizada por ${currentUser.name}. Factura #${invoiceId} generada por $${cartTotal.toFixed(2)}.`);
       
-      cart.forEach(item => {
-        const book = books.find(b => b.id === item.bookId);
-        if (book && book.stock - item.quantity === 0) {
-          addNotification(`Alerta de Inventario: El libro '${book.title}' se ha agotado.`);
-        }
-      });
-
-      setCart([]);
       setCheckoutCardName("");
       setCheckoutCardNumber("");
       setCheckoutCardExpiry("");
@@ -617,7 +754,11 @@ export const AppProvider = ({ children }) => {
       setSelectedInvoice(newInvoice);
       setActiveTab("invoice-detail");
       setIsCartOpen(false);
-    }, 2000);
+    } catch (error) {
+      console.error("Error procesando pago:", error);
+      setCheckoutError("Ocurrió un error al procesar la compra.");
+      setIsProcessingPayment(false);
+    }
   };
 
   const handleCreateBook = async (e) => {
