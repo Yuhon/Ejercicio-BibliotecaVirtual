@@ -11,7 +11,7 @@ const AdminBooksPage = () => {
     newBookCategory, setNewBookCategory, newBookDescription, setNewBookDescription,
     newBookPrice, setNewBookPrice, newBookStock, setNewBookStock,
     newBookIcon, setNewBookIcon, newBookImage, setNewBookImage, newBookGradient, setNewBookGradient,
-    adminBookError, adminBookSuccess, handleCreateBook,
+    adminBookError, adminBookSuccess, handleCreateBook, handleDeleteBook,
     editingBookId, setEditingBookId,
     editPriceVal, setEditPriceVal, editStockVal, setEditStockVal, handleUpdateBookPriceStock
   } = useApp();
@@ -151,9 +151,14 @@ const AdminBooksPage = () => {
                         <Button variant="outline" size="sm" style={{ padding: "4px 8px", fontSize: "0.75rem" }} onClick={handleCancelEditingBook}>✕</Button>
                       </div>
                     ) : (
-                      <Button variant="outline" size="sm" style={{ padding: "6px 10px", fontSize: "0.75rem" }} onClick={() => handleStartEditingBook(book)}>
-                        Editar ✏️
-                      </Button>
+                      <div style={{ display: "flex", gap: "4px" }}>
+                        <Button variant="outline" size="sm" style={{ padding: "6px 10px", fontSize: "0.75rem" }} onClick={() => handleStartEditingBook(book)}>
+                          Editar ✏️
+                        </Button>
+                        <Button variant="danger" size="sm" style={{ padding: "6px 10px", fontSize: "0.75rem" }} onClick={() => handleDeleteBook(book.id)}>
+                          Eliminar 🗑️
+                        </Button>
+                      </div>
                     )}
                   </td>
                 </tr>

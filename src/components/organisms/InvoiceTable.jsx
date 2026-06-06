@@ -30,7 +30,7 @@ const InvoiceTable = ({ invoices, onViewDetail, showUserColumn = false }) => {
                   {invoice.items.map(i => `${i.title} (x${i.quantity})`).join(", ")}
                 </p>
               </td>
-              <td style={{ fontWeight: "800", color: "#fff" }}>${invoice.total.toFixed(2)}</td>
+              <td style={{ fontWeight: "800", color: "#fff" }}>${parseFloat(invoice.total).toFixed(2)}</td>
               <td>
                 <Button variant="outline" size="sm" onClick={() => onViewDetail(invoice)}>
                   Ver {showUserColumn ? "Detalle" : "Factura"} 📄

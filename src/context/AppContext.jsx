@@ -264,7 +264,12 @@ export const AppProvider = ({ children }) => {
     }
 
     const loadSales = async () => {
-      const q = query(collection(db, "compra"), where("usuario", "==", doc(db, "usuario", currentUser.uid)));
+      let q;
+      if (currentUser.role === "admin") {
+        q = collection(db, "compra");
+      } else {
+        q = query(collection(db, "compra"), where("usuario", "==", doc(db, "usuario", currentUser.uid)));
+      }
       const snapshot = await getDocs(q);
       
       const loadedSales = [];
@@ -287,10 +292,26 @@ export const AppProvider = ({ children }) => {
            };
         });
 
+        let saleUserEmail = currentUser.email;
+        let saleUserName = currentUser.name;
+
+        if (currentUser.role === "admin" && data.usuario) {
+          try {
+            const userDocSnap = await getDoc(data.usuario);
+            if (userDocSnap.exists()) {
+              const uData = userDocSnap.data();
+              saleUserEmail = uData.correo || saleUserEmail;
+              saleUserName = uData.nombre || saleUserName;
+            }
+          } catch (e) {
+            console.error("Error fetching user for sale", e);
+          }
+        }
+
         loadedSales.push({
           id: compDoc.id, 
-          userEmail: currentUser.email,
-          userName: currentUser.name,
+          userEmail: saleUserEmail,
+          userName: saleUserName,
           date: new Date(data.fecha).toLocaleString(),
           items: invoiceItems,
           subtotal: data.total / 1.12,
@@ -851,6 +872,18 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  const handleDeleteBook = async (bookId) => {
+    if (!window.confirm("¿Estás seguro de eliminar este libro? Esta acción no se puede deshacer.")) return;
+    try {
+      const libroRef = doc(db, "libro", bookId);
+      await deleteDoc(libroRef);
+      addNotification("Inventario: Un libro ha sido eliminado del catálogo.");
+    } catch (error) {
+      console.error("Error eliminando libro en Firestore:", error);
+      alert("Hubo un error al eliminar el libro.");
+    }
+  };
+
   const handleUpdateBookPriceStock = async (bookId) => {
     const price = parseFloat(editPriceVal);
     const stock = parseInt(editStockVal, 10);
@@ -965,6 +998,7 @@ export const AppProvider = ({ children }) => {
     handlePaymentSubmit,
     handleCreateBook,
     handleUpdateBookPriceStock,
+    handleDeleteBook,
     getBestSellingBook,
     unreadNotificationsCount: notifications.filter(n => !n.read).length
   };
