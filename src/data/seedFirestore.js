@@ -67,7 +67,8 @@ export const seedDatabase = async () => {
         // Campos adicionales de UI
         description: book.description,
         gradient: book.gradient,
-        icon: book.icon
+        icon: book.icon,
+        image: book.image || null
       });
     });
 

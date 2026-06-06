@@ -106,6 +106,7 @@ export const AppProvider = ({ children }) => {
   const [newBookPrice, setNewBookPrice] = useState("");
   const [newBookStock, setNewBookStock] = useState("");
   const [newBookIcon, setNewBookIcon] = useState("📖");
+  const [newBookImage, setNewBookImage] = useState("");
   const [newBookGradient, setNewBookGradient] = useState("linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)");
   const [adminBookError, setAdminBookError] = useState("");
   const [adminBookSuccess, setAdminBookSuccess] = useState("");
@@ -147,7 +148,8 @@ export const AppProvider = ({ children }) => {
               stock: data.stock || 0,
               gradient: data.gradient || "linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)",
               icon: data.icon || "📖",
-              isbn: data.isbn || ""
+              isbn: data.isbn || "",
+              image: data.image || null
             };
           });
           setBooks(loadedBooks);
@@ -823,7 +825,8 @@ export const AppProvider = ({ children }) => {
         isbn: randomISBN,
         description: newBookDescription || "Sin descripción disponible.",
         gradient: newBookGradient,
-        icon: newBookIcon
+        icon: newBookIcon,
+        image: newBookImage || null
       });
 
       addNotification(`Catálogo: Se ha añadido el nuevo libro '${newBookTitle}' de ${newBookAuthor}.`);
@@ -836,6 +839,7 @@ export const AppProvider = ({ children }) => {
       setNewBookPrice("");
       setNewBookStock("");
       setNewBookIcon("📖");
+      setNewBookImage("");
       setNewBookGradient("linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)");
 
       setTimeout(() => {

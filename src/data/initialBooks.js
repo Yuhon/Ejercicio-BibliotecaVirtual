@@ -8,7 +8,8 @@ export const initialBooks = [
     price: 14.99,
     stock: 8,
     gradient: "linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)",
-    icon: "🚀"
+    icon: "🚀",
+    image: "https://images.unsplash.com/photo-1614728263952-84ea256f9679?auto=format&fit=crop&q=80&w=800"
   },
   {
     id: "2",

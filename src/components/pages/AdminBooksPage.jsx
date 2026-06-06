@@ -10,7 +10,7 @@ const AdminBooksPage = () => {
     newBookTitle, setNewBookTitle, newBookAuthor, setNewBookAuthor,
     newBookCategory, setNewBookCategory, newBookDescription, setNewBookDescription,
     newBookPrice, setNewBookPrice, newBookStock, setNewBookStock,
-    newBookIcon, setNewBookIcon, newBookGradient, setNewBookGradient,
+    newBookIcon, setNewBookIcon, newBookImage, setNewBookImage, newBookGradient, setNewBookGradient,
     adminBookError, adminBookSuccess, handleCreateBook,
     editingBookId, setEditingBookId,
     editPriceVal, setEditPriceVal, editStockVal, setEditStockVal, handleUpdateBookPriceStock
@@ -98,6 +98,10 @@ const AdminBooksPage = () => {
               </Select>
             </FormGroup>
           </div>
+
+          <FormGroup label="URL de Imagen (Opcional)">
+            <Input type="text" placeholder="https://ejemplo.com/imagen.jpg" value={newBookImage} onChange={(e) => setNewBookImage(e.target.value)} />
+          </FormGroup>
 
           <Button type="submit" variant="primary" style={{ width: "100%", marginTop: "10px" }}>
             Añadir al Inventario 📚
